@@ -11,6 +11,7 @@
 
 @interface GPViewController ()
 - (IBAction)StopRecording:(id)sender;
+- (IBAction)merge:(id)sender;
 - (IBAction)startRecording:(id)sender;
 @property (nonatomic, strong) GPScreenVideoRecording *recorder;
 @end
@@ -34,6 +35,10 @@
 - (IBAction)StopRecording:(id)sender {
     
     [self.recorder stopCapturing];
+}
+
+- (IBAction)merge:(id)sender {
+    [self.recorder merge];
 }
 
 - (IBAction)startRecording:(id)sender {

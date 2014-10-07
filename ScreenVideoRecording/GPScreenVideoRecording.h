@@ -12,4 +12,5 @@
 @property (nonatomic, strong) NSString *videoName;
 - (void)startCapturing;
 - (void)stopCapturing;
+- (void)merge ;
 @end

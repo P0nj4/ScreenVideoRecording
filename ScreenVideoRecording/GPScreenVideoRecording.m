@@ -115,86 +115,6 @@
     UIImage *img = [UIImage imageWithContentsOfFile:@"/Users/German/Library/Application Support/iPhone Simulator/7.1/Applications/77D9EB6B-971C-4DB4-AEA7-5DD8B3A97AA1/Documents/videos/video_asdasd/screen_94338.923704.png"];
     [self videoFromImage:img];
     return;
-    path = [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/video_%@.mp4", self.videoName]];
-    dispatch_async(_videoWriter_queue, ^{
-        NSError *error;
-        
-        videoWriter = [[AVAssetWriter alloc] initWithURL:[NSURL fileURLWithPath:path]
-                                                 fileType:AVFileTypeQuickTimeMovie
-                                                    error:&error];
-        NSParameterAssert(videoWriter);
-        
-        NSInteger pixelNumber = _winSize.width * _winSize.height * _scale;
-        NSDictionary* videoCompression = @{AVVideoAverageBitRateKey: @(pixelNumber * 11.4)};
-        
-        NSDictionary* videoSettings = @{AVVideoCodecKey: AVVideoCodecH264,
-                                        AVVideoWidthKey: [NSNumber numberWithInt:_winSize.width*_scale],
-                                        AVVideoHeightKey: [NSNumber numberWithInt:_winSize.height*_scale],
-                                        AVVideoCompressionPropertiesKey: videoCompression};
-        AVAssetWriterInput* videoStream = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:videoSettings];
-        NSParameterAssert(videoStream);
-        
-        videoStream.expectsMediaDataInRealTime = YES;
-        //videoStream.transform = [self videoTransformForDeviceOrientation];
-        
-        AVAssetWriterInputPixelBufferAdaptor *adaptor = [AVAssetWriterInputPixelBufferAdaptor assetWriterInputPixelBufferAdaptorWithAssetWriterInput:videoStream sourcePixelBufferAttributes:nil];
-        
-        [videoWriter addInput:videoStream];
-        
-        [videoWriter startWriting];
-        [videoWriter startSessionAtSourceTime:CMTimeMake(0, 1000)];
-        
-        
-        
-        CVPixelBufferRef buffer = NULL;
-        int frameCount = 1;
-        
-        
-        NSArray *images = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:self.filesPath error:&error];
-        
-        
-        
-        for(NSString *imgPath in images)
-        {
-            if (![[imgPath pathExtension] isEqualToString:@"png"]) {
-                continue;
-            }
-             UIImage *img = [UIImage imageWithContentsOfFile:[self.filesPath stringByAppendingFormat:@"/%@",imgPath]];
-            
-            NSString *firstPart = [imgPath componentsSeparatedByString:@"_"][1];
-            
-            float timed = [[firstPart stringByReplacingOccurrencesOfString:@".png" withString:@""] floatValue];
-            
-            if (!self.firstTimeStamp) {
-                self.firstTimeStamp = timed;
-            }
-            if (adaptor.assetWriterInput.readyForMoreMediaData){
-                CFTimeInterval elapsed = (timed - self.firstTimeStamp);
-                CMTime time = CMTimeMakeWithSeconds(elapsed, 1000);
-                CVPixelBufferRef pixelBuffer = [self pixelBufferFromCGImage:[img CGImage]];
-                BOOL success = [adaptor appendPixelBuffer:pixelBuffer withPresentationTime:time];
-                if (!success) {
-                    NSLog(@"Warning: Unable to write buffer to video");
-                }
-                CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
-                CVPixelBufferRelease(pixelBuffer);
-
-            }else{
-                [NSThread sleepForTimeInterval:.5];
-            }
-        }
-        
-        [videoStream markAsFinished];
-        [videoWriter finishWritingWithCompletionHandler:^{
-            NSLog(@"lkkakakak");
-            dispatch_async(dispatch_get_main_queue(), ^{
-                KTouchPointerWindowUninstall();
-                if (completionBlock) 
-                    completionBlock();
-            });
-        }];
-    });
-    
 }
 
 
@@ -283,8 +203,89 @@
     }
 }
 
+- (NSString*) applicationDocumentsDirectory
+
+{
+    
+    NSArray* paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    
+    NSString* basePath = ([paths count] > 0) ? [paths objectAtIndex:0] : nil;
+    
+    return basePath;
+    
+}
 
 
+- (void) mergeTwoVideo
+{
+    AVMutableComposition* composition = [[AVMutableComposition alloc] init];
+    
+    NSString *path1 = @"/Users/German/Library/Application Support/iPhone Simulator/7.1/Applications/77D9EB6B-971C-4DB4-AEA7-5DD8B3A97AA1/Documents/output1.mp4";
+    NSString *path2 = @"/Users/German/Library/Application Support/iPhone Simulator/7.1/Applications/77D9EB6B-971C-4DB4-AEA7-5DD8B3A97AA1/Documents/output2.mp4";
+    AVURLAsset *video1 = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path1] options:nil];
+    AVURLAsset *video2 = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path2] options:nil];
+    
+    AVMutableCompositionTrack * composedTrack = [composition addMutableTrackWithMediaType:AVMediaTypeVideo
+                                                                         preferredTrackID:kCMPersistentTrackID_Invalid];
+    NSArray *assets = @[video1, video2];
+    int i = assets.count;
+    while (i > 0 ) {
+        AVURLAsset *videoAsset = [assets objectAtIndex:i - 1];
+        [composedTrack insertTimeRange:CMTimeRangeMake(kCMTimeZero, videoAsset.duration)
+                           ofTrack:[[videoAsset tracksWithMediaType:AVMediaTypeVideo] objectAtIndex:0]
+                            atTime:kCMTimeZero
+                             error:nil];
+        i--;
+    }
+    
+    NSString* documentsDirectory= [self applicationDocumentsDirectory];
+    NSString* myDocumentPath= [documentsDirectory stringByAppendingPathComponent:@"merge_video.mp4"];
+    NSURL *url = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
+    if([[NSFileManager defaultManager] fileExistsAtPath:myDocumentPath])
+    {
+        [[NSFileManager defaultManager] removeItemAtPath:myDocumentPath error:nil];
+    }
+    
+    AVAssetExportSession *exporter = [[AVAssetExportSession alloc] initWithAsset:composition presetName:AVAssetExportPresetHighestQuality];
+    exporter.outputURL=url;
+    exporter.outputFileType = @"com.apple.quicktime-movie";
+    exporter.shouldOptimizeForNetworkUse = YES;
+    [exporter exportAsynchronouslyWithCompletionHandler:^{
+        switch ([exporter status]) {
+            case AVAssetExportSessionStatusUnknown:
+                NSLog(@"StatusUnknown");
+                break;
+            case AVAssetExportSessionStatusWaiting:
+                NSLog(@"Waiting");
+                break;
+            case AVAssetExportSessionStatusExporting:
+                NSLog(@"Exporting");
+                break;
+            case AVAssetExportSessionStatusCompleted:
+                NSLog(@"Completed");
+                break;
+            case AVAssetExportSessionStatusFailed:
+                NSLog(@"Failed");
+                break;
+            case AVAssetExportSessionStatusCancelled:
+                NSLog(@"Cancelled");
+                break;
+            default:
+                NSLog(@"unknown");
+                break;
+        }
+        
+    }];
+}
+
+
+
+
+- (void)merge {
+    
+    [self mergeTwoVideo];
+    
+}
 - (CVPixelBufferRef)pixelBufferFromCGImage:(CGImageRef)image
 {
 
