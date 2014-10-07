@@ -9,8 +9,9 @@
 #import <Foundation/Foundation.h>
 
 @interface GPScreenVideoRecording : NSObject
-@property (nonatomic, strong) NSString *videoName;
 - (void)startCapturing;
 - (void)stopCapturing;
-- (void)merge ;
+- (void)mergeVideos;;
+- (void)finishWithPendingScreenshots;
+- (BOOL)thereArePendingScreenshots:(NSString **)pendingPath;
 @end

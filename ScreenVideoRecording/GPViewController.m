@@ -10,6 +10,7 @@
 #import "GPScreenVideoRecording.h"
 
 @interface GPViewController ()
+- (IBAction)Finish:(id)sender;
 - (IBAction)StopRecording:(id)sender;
 - (IBAction)merge:(id)sender;
 - (IBAction)startRecording:(id)sender;
@@ -32,13 +33,17 @@
     // Dispose of any resources that can be recreated.
 }
 
+- (IBAction)Finish:(id)sender {
+    [self.recorder finishWithPendingScreenshots];
+}
+
 - (IBAction)StopRecording:(id)sender {
     
     [self.recorder stopCapturing];
 }
 
 - (IBAction)merge:(id)sender {
-    [self.recorder merge];
+    [self.recorder mergeVideos];
 }
 
 - (IBAction)startRecording:(id)sender {

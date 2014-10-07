@@ -12,7 +12,9 @@
 #import "KTouchPointerWindow.h"
 
 #define kMaxScreenshotCount 150
+#define kFramesMod 1
 #define kVideosTemporalFolder @"videos/tmp"
+#define kScreenshotsTemporalFolder @"videos/screenshot"
 
 @interface GPScreenVideoRecording ()
 @property (strong, nonatomic) CADisplayLink *displayLink;
@@ -29,13 +31,12 @@
     dispatch_queue_t _videoWriter_queue;
     dispatch_semaphore_t _pixelAppendSemaphore;
     dispatch_semaphore_t _writeVideoSemaphore;
-    
     int numberOfScreenshots;
     AVAssetWriter *videoWriter;
 }
 
 - (NSString *)filesPath:(BOOL)video {
-    NSString *_filesPath = [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/videos/video%@_%li", self.videoName, (video ? (long)self.videoloop : (long)self.screenShotloop)]];
+    NSString *_filesPath = [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/%@/screenshot_%li", kScreenshotsTemporalFolder, (video ? (long)self.videoloop : (long)self.screenShotloop)]];
     if (![[NSFileManager defaultManager] fileExistsAtPath:_filesPath])
         [[NSFileManager defaultManager] createDirectoryAtPath:_filesPath withIntermediateDirectories:YES attributes:nil error:nil];
     
@@ -43,7 +44,10 @@
 }
 
 - (NSString *)videosTemporalFolder {
-    return [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"/Documents/%@/",kVideosTemporalFolder]];
+    NSString *_filesPath = [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"/Documents/%@/",kVideosTemporalFolder]];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:_filesPath])
+        [[NSFileManager defaultManager] createDirectoryAtPath:_filesPath withIntermediateDirectories:YES attributes:nil error:nil];
+    return _filesPath;
 }
 
 
@@ -51,7 +55,6 @@
 - (instancetype)init {
     self = [super init];
     if (self) {
-        self.videoName = @"asdasd";
         [self setupWriter];
     }
     return self;
@@ -60,7 +63,6 @@
 - (instancetype)initWithTitle:(NSString *)title {
     self = [super init];
     if (self) {
-        self.videoName = title;
         [self setupWriter];
     }
     return self;
@@ -74,6 +76,7 @@
     if ((UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) && _scale > 1) {
         _scale = 1.0;
     }
+    _writeVideoSemaphore = nil;
     _screenTaker_queue = dispatch_queue_create("GPScreenVideoRecording.screenTaker_queue", DISPATCH_QUEUE_SERIAL);
     _FSWriter_queue = dispatch_queue_create("GPScreenVideoRecording.FSWriter_queue", DISPATCH_QUEUE_SERIAL);
     _videoWriter_queue = dispatch_queue_create("GPScreenVideoRecording._videoWriter_queue", DISPATCH_QUEUE_SERIAL);
@@ -83,6 +86,9 @@
 
 #pragma mark - Public methods
 - (void)startCapturing {
+    if (!_pixelAppendSemaphore) {
+        [self setupWriter];
+    }
     _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(takeScreenShot)];
     [_displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     KTouchPointerWindowInstall();
@@ -90,6 +96,7 @@
 
 - (void)stopCapturing {
     [_displayLink invalidate];
+    [self finishWithPendingScreenshots];
 }
 
 #pragma mark - Screen methods
@@ -103,7 +110,7 @@
                 self.screenShotloop++;
                 numberOfScreenshots = 0;
                 self.firstTimeStamp = 0;
-                [self videoFromImages];
+                [self videoFromImages:nil];
             }
         }
         UIWindow *mainWindow = [[[UIApplication sharedApplication] windows] objectAtIndex:0];
@@ -114,20 +121,75 @@
         UIGraphicsEndImageContext();
         
         dispatch_async(_FSWriter_queue, ^{
-            NSData * data = UIImagePNGRepresentation(image);
-            NSString *filePathForScreenshot = [NSString stringWithFormat:@"%@/screen_%f.png", [self filesPath:NO], _displayLink.timestamp];
-            [data writeToFile:filePathForScreenshot atomically:YES];
+            if (numberOfScreenshots % kFramesMod == 0) {
+                NSData * data = UIImagePNGRepresentation(image);
+                NSString *filePathForScreenshot = [NSString stringWithFormat:@"%@/screen_%f.png", [self filesPath:NO], _displayLink.timestamp];
+                [data writeToFile:filePathForScreenshot atomically:YES];
+            }
             numberOfScreenshots++;
             dispatch_semaphore_signal(_pixelAppendSemaphore);
         });
     });
 }
 
+- (void)finishWithPendingScreenshots {
+    dispatch_queue_t finishTheJobQueue = dispatch_queue_create("q_finishIt", NULL);
+    dispatch_async(finishTheJobQueue, ^{
+
+        BOOL pendingScreenshots = YES;
+        while (pendingScreenshots) {
+            if (dispatch_semaphore_wait(_writeVideoSemaphore, DISPATCH_TIME_NOW) != 0) {
+                [NSThread sleepForTimeInterval:0.2];
+            } else {
+                NSString *pendingPath = nil;
+                pendingScreenshots = [self thereArePendingScreenshots:&pendingPath];
+                if (!pendingScreenshots) {
+                    [self mergeVideos];
+                    continue;
+                }
+                numberOfScreenshots = 0;
+                self.firstTimeStamp = 0;
+                [self videoFromImages:pendingPath];
+            }
+        }
+    });
+}
+
+- (BOOL)thereArePendingScreenshots:(NSString **)pendingPath {
+    NSError *error;
+    NSString *_filePath = [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/%@/", kScreenshotsTemporalFolder]];
+    NSArray *screenshotsPath = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:_filePath error:&error];
+    if (error) {
+        NSLog(@"Error while taking all the screenshots %@", error);
+        return NO;
+    } else {
+        if(screenshotsPath.count > 0) {
+            int i = 0;
+            while (!*pendingPath && i < screenshotsPath.count) {
+                if (![[screenshotsPath objectAtIndex:i] isEqualToString:@".DS_Store"] && ([[screenshotsPath objectAtIndex:i] rangeOfString:@"screenshot"].location != NSNotFound)) {
+                    *pendingPath = [_filePath stringByAppendingString:[NSString stringWithFormat:@"/%@", [screenshotsPath objectAtIndex:i]]];
+                }
+                i++;
+            }
+            return (pendingPath != nil);
+        }
+        return NO;
+    }
+}
+
 #pragma mark - Video methods
-- (void)videoFromImages
+- (void)videoFromImages:(NSString *)place
 {
     dispatch_async(_videoWriter_queue, ^{
         NSError *error;
+        NSLog(@"video started");
+        
+        BOOL fileMovieExists = YES;
+        while (fileMovieExists) {
+            fileMovieExists = [[NSFileManager defaultManager] fileExistsAtPath:[[self videosTemporalFolder] stringByAppendingPathComponent:[NSString stringWithFormat:@"/output%ld.mp4", (long)self.videoloop]]];
+            if (fileMovieExists)
+                self.videoloop ++;
+        }
         
         videoWriter = [[AVAssetWriter alloc] initWithURL:
                        [NSURL fileURLWithPath:[[self videosTemporalFolder] stringByAppendingPathComponent:[NSString stringWithFormat:@"/output%ld.mp4", (long)self.videoloop]]] fileType:AVFileTypeQuickTimeMovie
@@ -157,7 +219,7 @@
             [videoWriter startWriting];
             [videoWriter startSessionAtSourceTime:kCMTimeZero];
             
-            NSArray *images = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self filesPath:YES] error:&error];
+            NSArray *images = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:(!place ? [self filesPath:YES] : place) error:&error];
             
             int i = 0;
             while (i < images.count) {
@@ -168,7 +230,7 @@
                     i++;
                     continue;
                 }
-                UIImage *img = [UIImage imageWithContentsOfFile:[[self filesPath:YES] stringByAppendingFormat:@"/%@",imgPath]];
+                UIImage *img = [UIImage imageWithContentsOfFile:[(!place ? [self filesPath:YES] : place) stringByAppendingFormat:@"/%@",imgPath]];
                 
                 NSString *firstPart = [imgPath componentsSeparatedByString:@"_"][1];
                 
@@ -197,12 +259,12 @@
             
             [videoWriter finishWritingWithCompletionHandler:^{
                 NSError *error;
-                [[NSFileManager defaultManager] removeItemAtPath:[self filesPath:YES] error:&error];
+                [[NSFileManager defaultManager] removeItemAtPath:(!place ? [self filesPath:YES] : place) error:&error];
                 if (error)
                     NSLog(@"error removing path: %@", error);
                 
                 self.videoloop++;
-                NSLog(@"finished"); // Never gets called
+                NSLog(@"video finished");
                 dispatch_semaphore_signal(_writeVideoSemaphore);
             }];
         }
@@ -262,78 +324,109 @@
 
 - (void)mergeVideos
 {
-    AVMutableComposition* composition = [[AVMutableComposition alloc] init];
-    AVMutableCompositionTrack * composedTrack = [composition addMutableTrackWithMediaType:AVMediaTypeVideo
-                                                                         preferredTrackID:kCMPersistentTrackID_Invalid];
-    NSMutableArray *assets = [NSMutableArray arrayWithArray:@[]];
-    NSError *error;
-
-    NSArray *allVideosPath = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self videosTemporalFolder] error:&error];
-    if (error)
-        NSLog(@"there was an error while getting the videos path: %@", error);
+    dispatch_queue_t mergeQueue = dispatch_queue_create("q_mergeVideos", NULL);
     
-    for (NSString *videoPath in allVideosPath) {
-        if (![[videoPath pathExtension] isEqualToString:@"mp4"]) {
-            continue;
+    dispatch_async(mergeQueue, ^{
+        BOOL readyToRun = (dispatch_semaphore_wait(_writeVideoSemaphore, DISPATCH_TIME_NOW) != 0) ;
+        while (!readyToRun) {
+            [NSThread sleepForTimeInterval:0.2];
+        }
+        NSLog(@"MERGE - Started");
+        AVMutableComposition* composition = [[AVMutableComposition alloc] init];
+        AVMutableCompositionTrack * composedTrack = [composition addMutableTrackWithMediaType:AVMediaTypeVideo
+                                                                             preferredTrackID:kCMPersistentTrackID_Invalid];
+        NSMutableArray *assets = [NSMutableArray arrayWithArray:@[]];
+        NSError *error;
+        
+        NSArray *allVideosPath = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self videosTemporalFolder] error:&error];
+        if (error) {
+            NSLog(@"there was an error while getting the videos path: %@", error);
+            return;
         }
         
-        NSString *path = [[self videosTemporalFolder] stringByAppendingFormat:@"/%@",videoPath];
-        AVURLAsset *video = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
-        [assets addObject:video];
-    }
-    
-    int i = assets.count;
-    while (i > 0 ) {
-        AVURLAsset *videoAsset = [assets objectAtIndex:i - 1];
-        if ([[videoAsset tracksWithMediaType:AVMediaTypeVideo] count] == 0) {
+        for (NSString *videoPath in allVideosPath) {
+            if (![[videoPath pathExtension] isEqualToString:@"mp4"]) {
+                continue;
+            }
+            
+            NSString *path = [[self videosTemporalFolder] stringByAppendingFormat:@"/%@",videoPath];
+            AVURLAsset *video = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
+            [assets addObject:video];
+        }
+        
+        int i = assets.count;
+        if (assets.count == 0) {
+            return;
+        }
+        while (i > 0 ) {
+            AVURLAsset *videoAsset = [assets objectAtIndex:i - 1];
+            if ([[videoAsset tracksWithMediaType:AVMediaTypeVideo] count] == 0) {
+                i--;
+                continue;
+            }
+            [composedTrack insertTimeRange:CMTimeRangeMake(kCMTimeZero, videoAsset.duration)
+                                   ofTrack:[[videoAsset tracksWithMediaType:AVMediaTypeVideo] objectAtIndex:0]
+                                    atTime:kCMTimeZero
+                                     error:nil];
             i--;
-            continue;
-        }
-        [composedTrack insertTimeRange:CMTimeRangeMake(kCMTimeZero, videoAsset.duration)
-                           ofTrack:[[videoAsset tracksWithMediaType:AVMediaTypeVideo] objectAtIndex:0]
-                            atTime:kCMTimeZero
-                             error:nil];
-        i--;
-    }
-    
-    NSString* documentsDirectory = [self applicationDocumentsDirectory];
-    NSString* myDocumentPath= [documentsDirectory stringByAppendingPathComponent:@"merge_video.mp4"];
-    NSURL *url = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
-    if([[NSFileManager defaultManager] fileExistsAtPath:myDocumentPath])
-    {
-        [[NSFileManager defaultManager] removeItemAtPath:myDocumentPath error:nil];
-    }
-    
-    AVAssetExportSession *exporter = [[AVAssetExportSession alloc] initWithAsset:composition presetName:AVAssetExportPresetHighestQuality];
-    exporter.outputURL=url;
-    exporter.outputFileType = @"com.apple.quicktime-movie";
-    exporter.shouldOptimizeForNetworkUse = YES;
-    [exporter exportAsynchronouslyWithCompletionHandler:^{
-        switch ([exporter status]) {
-            case AVAssetExportSessionStatusUnknown:
-                NSLog(@"StatusUnknown");
-                break;
-            case AVAssetExportSessionStatusWaiting:
-                NSLog(@"Waiting");
-                break;
-            case AVAssetExportSessionStatusExporting:
-                NSLog(@"Exporting");
-                break;
-            case AVAssetExportSessionStatusCompleted:
-                NSLog(@"Completed");
-                break;
-            case AVAssetExportSessionStatusFailed:
-                NSLog(@"Failed");
-                break;
-            case AVAssetExportSessionStatusCancelled:
-                NSLog(@"Cancelled");
-                break;
-            default:
-                NSLog(@"unknown");
-                break;
         }
         
-    }];
+        NSString* documentsDirectory = [self applicationDocumentsDirectory];
+#warning nombre del video debería llebar fecha
+        NSString* myDocumentPath= [documentsDirectory stringByAppendingPathComponent:@"merge_video.mp4"];
+        NSURL *url = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
+        if([[NSFileManager defaultManager] fileExistsAtPath:myDocumentPath])
+        {
+            [[NSFileManager defaultManager] removeItemAtPath:myDocumentPath error:nil];
+        }
+        
+        AVAssetExportSession *exporter = [[AVAssetExportSession alloc] initWithAsset:composition presetName:AVAssetExportPresetHighestQuality];
+        exporter.outputURL=url;
+        exporter.outputFileType = @"com.apple.quicktime-movie";
+        exporter.shouldOptimizeForNetworkUse = YES;
+        [exporter exportAsynchronouslyWithCompletionHandler:^{
+            switch ([exporter status]) {
+                case AVAssetExportSessionStatusUnknown:
+                    NSLog(@"Merge StatusUnknown");
+                    break;
+                case AVAssetExportSessionStatusWaiting:
+                    NSLog(@"Merge Waiting");
+                    break;
+                case AVAssetExportSessionStatusExporting:
+                    NSLog(@"Merge Exporting");
+                    break;
+                case AVAssetExportSessionStatusCompleted:
+                {
+                    NSError *fsError;
+                    [[NSFileManager defaultManager] removeItemAtPath:[self videosTemporalFolder] error:&fsError];
+                    if (fsError) {
+                        NSLog(@"Error while removing the videos temporal folder: %@", fsError);
+                    }
+                    NSLog(@"Merge Completed");
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        _screenTaker_queue = nil;
+                        _FSWriter_queue = nil;
+                        _videoWriter_queue = nil;
+                        _pixelAppendSemaphore = nil;
+                        //_writeVideoSemaphore = nil;
+                        videoWriter = nil;
+                    });
+                    break;
+                }
+                case AVAssetExportSessionStatusFailed:
+                    NSLog(@"Merge Failed");
+                    break;
+                case AVAssetExportSessionStatusCancelled:
+                    NSLog(@"Merge Cancelled");
+                    break;
+                default:
+                    NSLog(@"Merge unknown");
+                    break;
+            }
+            
+        }];
+        
+    });
 }
 
 
