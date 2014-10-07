@@ -12,6 +12,7 @@
 #import "KTouchPointerWindow.h"
 
 #define kMaxScreenshotCount 150
+#define kVideosTemporalFolder @"videos/tmp"
 
 @interface GPScreenVideoRecording ()
 @property (strong, nonatomic) CADisplayLink *displayLink;
@@ -41,6 +42,12 @@
     return _filesPath;
 }
 
+- (NSString *)videosTemporalFolder {
+    return [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"/Documents/%@/",kVideosTemporalFolder]];
+}
+
+
+#pragma mark - Initialization methods
 - (instancetype)init {
     self = [super init];
     if (self) {
@@ -59,7 +66,6 @@
     return self;
 }
 
-
 - (void)setupWriter {
     UIWindow *mainWindow = [[[UIApplication sharedApplication] windows] objectAtIndex:0];
     _winSize = mainWindow.bounds.size;
@@ -75,6 +81,7 @@
     _writeVideoSemaphore = dispatch_semaphore_create(1);
 }
 
+#pragma mark - Public methods
 - (void)startCapturing {
     _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(takeScreenShot)];
     [_displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
@@ -83,12 +90,9 @@
 
 - (void)stopCapturing {
     [_displayLink invalidate];
-    /*
-    [self writeImagesAsMovie:nil toPath:nil onCompletion:^{
-        NSLog(@"JEJEJEJE ANDUBOOOO");
-    }];*/
 }
 
+#pragma mark - Screen methods
 - (void)takeScreenShot {
     if (dispatch_semaphore_wait(_pixelAppendSemaphore, DISPATCH_TIME_NOW) != 0) {
         return;
@@ -99,7 +103,7 @@
                 self.screenShotloop++;
                 numberOfScreenshots = 0;
                 self.firstTimeStamp = 0;
-                [self videoFromImage];
+                [self videoFromImages];
             }
         }
         UIWindow *mainWindow = [[[UIApplication sharedApplication] windows] objectAtIndex:0];
@@ -119,13 +123,14 @@
     });
 }
 
-- (void)videoFromImage
+#pragma mark - Video methods
+- (void)videoFromImages
 {
     dispatch_async(_videoWriter_queue, ^{
         NSError *error;
         
         videoWriter = [[AVAssetWriter alloc] initWithURL:
-                       [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"/Documents/output%ld.mp4", (long)self.videoloop]]] fileType:AVFileTypeQuickTimeMovie
+                       [NSURL fileURLWithPath:[[self videosTemporalFolder] stringByAppendingPathComponent:[NSString stringWithFormat:@"/output%ld.mp4", (long)self.videoloop]]] fileType:AVFileTypeQuickTimeMovie
                                                    error:&error];
         if (!error) {
             NSParameterAssert(videoWriter);
@@ -191,6 +196,11 @@
             [videoWriterInput markAsFinished];
             
             [videoWriter finishWritingWithCompletionHandler:^{
+                NSError *error;
+                [[NSFileManager defaultManager] removeItemAtPath:[self filesPath:YES] error:&error];
+                if (error)
+                    NSLog(@"error removing path: %@", error);
+                
                 self.videoloop++;
                 NSLog(@"finished"); // Never gets called
                 dispatch_semaphore_signal(_writeVideoSemaphore);
@@ -202,34 +212,83 @@
     });
 }
 
+- (CVPixelBufferRef)pixelBufferFromCGImage:(CGImageRef)image
+{
+    
+    NSDictionary *options =
+    [NSDictionary dictionaryWithObjectsAndKeys:
+     [NSNumber numberWithBool:YES],
+     kCVPixelBufferCGImageCompatibilityKey,
+     [NSNumber numberWithBool:YES],
+     kCVPixelBufferCGBitmapContextCompatibilityKey,
+     nil];
+    CVPixelBufferRef pxbuffer = NULL;
+    
+    CVReturn status =
+    CVPixelBufferCreate(
+                        kCFAllocatorDefault, _winSize.width, _winSize.height,
+                        kCVPixelFormatType_32ARGB, (__bridge CFDictionaryRef)options,
+                        &pxbuffer);
+    NSParameterAssert(status == kCVReturnSuccess && pxbuffer != NULL);
+    
+    CVPixelBufferLockBaseAddress(pxbuffer, 0);
+    void *pxdata = CVPixelBufferGetBaseAddress(pxbuffer);
+    
+    CGColorSpaceRef rgbColorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(
+                                                 pxdata, _winSize.width, _winSize.height,
+                                                 8, CVPixelBufferGetBytesPerRow(pxbuffer),
+                                                 rgbColorSpace,
+                                                 (CGBitmapInfo)kCGBitmapByteOrder32Little |
+                                                 kCGImageAlphaPremultipliedFirst);
+    
+    CGContextDrawImage(context, CGRectMake(0, 0, CGImageGetWidth(image),
+                                           CGImageGetHeight(image)), image);
+    CGColorSpaceRelease(rgbColorSpace);
+    CGContextRelease(context);
+    
+    CVPixelBufferUnlockBaseAddress(pxbuffer, 0);
+    
+    return pxbuffer;
+}
+
 - (NSString*) applicationDocumentsDirectory
 
 {
-    
     NSArray* paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    
     NSString* basePath = ([paths count] > 0) ? [paths objectAtIndex:0] : nil;
-    
     return basePath;
-    
 }
 
-
-- (void) mergeTwoVideo
+- (void)mergeVideos
 {
     AVMutableComposition* composition = [[AVMutableComposition alloc] init];
-    
-    NSString *path1 = @"/Users/German/Library/Application Support/iPhone Simulator/7.1/Applications/77D9EB6B-971C-4DB4-AEA7-5DD8B3A97AA1/Documents/output1.mp4";
-    NSString *path2 = @"/Users/German/Library/Application Support/iPhone Simulator/7.1/Applications/77D9EB6B-971C-4DB4-AEA7-5DD8B3A97AA1/Documents/output2.mp4";
-    AVURLAsset *video1 = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path1] options:nil];
-    AVURLAsset *video2 = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path2] options:nil];
-    
     AVMutableCompositionTrack * composedTrack = [composition addMutableTrackWithMediaType:AVMediaTypeVideo
                                                                          preferredTrackID:kCMPersistentTrackID_Invalid];
-    NSArray *assets = @[video1, video2];
+    NSMutableArray *assets = [NSMutableArray arrayWithArray:@[]];
+    NSError *error;
+
+    NSArray *allVideosPath = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self videosTemporalFolder] error:&error];
+    if (error)
+        NSLog(@"there was an error while getting the videos path: %@", error);
+    
+    for (NSString *videoPath in allVideosPath) {
+        if (![[videoPath pathExtension] isEqualToString:@"mp4"]) {
+            continue;
+        }
+        
+        NSString *path = [[self videosTemporalFolder] stringByAppendingFormat:@"/%@",videoPath];
+        AVURLAsset *video = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
+        [assets addObject:video];
+    }
+    
     int i = assets.count;
     while (i > 0 ) {
         AVURLAsset *videoAsset = [assets objectAtIndex:i - 1];
+        if ([[videoAsset tracksWithMediaType:AVMediaTypeVideo] count] == 0) {
+            i--;
+            continue;
+        }
         [composedTrack insertTimeRange:CMTimeRangeMake(kCMTimeZero, videoAsset.duration)
                            ofTrack:[[videoAsset tracksWithMediaType:AVMediaTypeVideo] objectAtIndex:0]
                             atTime:kCMTimeZero
@@ -277,53 +336,6 @@
     }];
 }
 
-
-
-
-- (void)merge {
-    
-    [self mergeTwoVideo];
-    
-}
-- (CVPixelBufferRef)pixelBufferFromCGImage:(CGImageRef)image
-{
-
-    NSDictionary *options =
-    [NSDictionary dictionaryWithObjectsAndKeys:
-     [NSNumber numberWithBool:YES],
-     kCVPixelBufferCGImageCompatibilityKey,
-     [NSNumber numberWithBool:YES],
-     kCVPixelBufferCGBitmapContextCompatibilityKey,
-     nil];
-    CVPixelBufferRef pxbuffer = NULL;
-    
-    CVReturn status =
-    CVPixelBufferCreate(
-                        kCFAllocatorDefault, _winSize.width, _winSize.height,
-                        kCVPixelFormatType_32ARGB, (__bridge CFDictionaryRef)options,
-                        &pxbuffer);
-    NSParameterAssert(status == kCVReturnSuccess && pxbuffer != NULL);
-    
-    CVPixelBufferLockBaseAddress(pxbuffer, 0);
-    void *pxdata = CVPixelBufferGetBaseAddress(pxbuffer);
-    
-    CGColorSpaceRef rgbColorSpace = CGColorSpaceCreateDeviceRGB();
-    CGContextRef context = CGBitmapContextCreate(
-                                                 pxdata, _winSize.width, _winSize.height,
-                                                 8, CVPixelBufferGetBytesPerRow(pxbuffer),
-                                                 rgbColorSpace,
-                                                 (CGBitmapInfo)kCGBitmapByteOrder32Little |
-                                                 kCGImageAlphaPremultipliedFirst);
-    
-    CGContextDrawImage(context, CGRectMake(0, 0, CGImageGetWidth(image),
-                                           CGImageGetHeight(image)), image);
-    CGColorSpaceRelease(rgbColorSpace);
-    CGContextRelease(context);
-    
-    CVPixelBufferUnlockBaseAddress(pxbuffer, 0);
-    
-    return pxbuffer;
-}
 
 
 @end
