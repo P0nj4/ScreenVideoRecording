@@ -11,11 +11,14 @@
 #import <AVFoundation/AVFoundation.h>
 #import "KTouchPointerWindow.h"
 
+#define kMaxScreenshotCount 150
+
 @interface GPScreenVideoRecording ()
-@property (nonatomic, strong, readonly) NSString *filesPath;
 @property (strong, nonatomic) CADisplayLink *displayLink;
 @property (nonatomic) CGSize winSize;
 @property (nonatomic) CGFloat scale;
+@property (nonatomic) NSInteger screenShotloop;
+@property (nonatomic) NSInteger videoloop;
 @property (nonatomic) CFTimeInterval firstTimeStamp;
 @end
 
@@ -24,18 +27,17 @@
     dispatch_queue_t _FSWriter_queue;
     dispatch_queue_t _videoWriter_queue;
     dispatch_semaphore_t _pixelAppendSemaphore;
+    dispatch_semaphore_t _writeVideoSemaphore;
     
-    
+    int numberOfScreenshots;
     AVAssetWriter *videoWriter;
 }
-@synthesize filesPath = _filesPath;
 
-- (NSString *)filesPath {
-    if (!_filesPath) {
-        _filesPath = [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/videos/video_%@", self.videoName]];
-        if (![[NSFileManager defaultManager] fileExistsAtPath:self.filesPath])
-            [[NSFileManager defaultManager] createDirectoryAtPath:self.filesPath withIntermediateDirectories:YES attributes:nil error:nil];
-    }
+- (NSString *)filesPath:(BOOL)video {
+    NSString *_filesPath = [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/videos/video%@_%li", self.videoName, (video ? (long)self.videoloop : (long)self.screenShotloop)]];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:_filesPath])
+        [[NSFileManager defaultManager] createDirectoryAtPath:_filesPath withIntermediateDirectories:YES attributes:nil error:nil];
+    
     return _filesPath;
 }
 
@@ -70,6 +72,7 @@
     _FSWriter_queue = dispatch_queue_create("GPScreenVideoRecording.FSWriter_queue", DISPATCH_QUEUE_SERIAL);
     _videoWriter_queue = dispatch_queue_create("GPScreenVideoRecording._videoWriter_queue", DISPATCH_QUEUE_SERIAL);
     _pixelAppendSemaphore = dispatch_semaphore_create(1);
+    _writeVideoSemaphore = dispatch_semaphore_create(1);
 }
 
 - (void)startCapturing {
@@ -80,16 +83,25 @@
 
 - (void)stopCapturing {
     [_displayLink invalidate];
+    /*
     [self writeImagesAsMovie:nil toPath:nil onCompletion:^{
         NSLog(@"JEJEJEJE ANDUBOOOO");
-    }];
+    }];*/
 }
+
 - (void)takeScreenShot {
     if (dispatch_semaphore_wait(_pixelAppendSemaphore, DISPATCH_TIME_NOW) != 0) {
         return;
     }
     dispatch_async(_screenTaker_queue, ^{
-        
+        if (numberOfScreenshots >= kMaxScreenshotCount) {
+            if (!dispatch_semaphore_wait(_writeVideoSemaphore, DISPATCH_TIME_NOW) != 0) {
+                self.screenShotloop++;
+                numberOfScreenshots = 0;
+                self.firstTimeStamp = 0;
+                [self videoFromImage];
+            }
+        }
         UIWindow *mainWindow = [[[UIApplication sharedApplication] windows] objectAtIndex:0];
         
         UIGraphicsBeginImageContext(_winSize);
@@ -99,108 +111,95 @@
         
         dispatch_async(_FSWriter_queue, ^{
             NSData * data = UIImagePNGRepresentation(image);
-            [data writeToFile:[NSString stringWithFormat:@"%@/screen_%f.png", self.filesPath, _displayLink.timestamp] atomically:YES];
+            NSString *filePathForScreenshot = [NSString stringWithFormat:@"%@/screen_%f.png", [self filesPath:NO], _displayLink.timestamp];
+            [data writeToFile:filePathForScreenshot atomically:YES];
+            numberOfScreenshots++;
             dispatch_semaphore_signal(_pixelAppendSemaphore);
         });
     });
 }
 
-- (void)cleanup
+- (void)videoFromImage
 {
-    
-}
-
-- (void)writeImagesAsMovie:(NSArray *)array toPath:(NSString*)path onCompletion:(void(^)())completionBlock {
-    
-    UIImage *img = [UIImage imageWithContentsOfFile:@"/Users/German/Library/Application Support/iPhone Simulator/7.1/Applications/77D9EB6B-971C-4DB4-AEA7-5DD8B3A97AA1/Documents/videos/video_asdasd/screen_94338.923704.png"];
-    [self videoFromImage:img];
-    return;
-}
-
-
-- (void)videoFromImage:(UIImage *)image
-{
-    NSError *error;
-
-    videoWriter = [[AVAssetWriter alloc] initWithURL:
-                        [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"/Documents/output.mp4"]] fileType:AVFileTypeQuickTimeMovie
-                                                    error:&error];
-    if (!error) {
-        NSParameterAssert(videoWriter);
+    dispatch_async(_videoWriter_queue, ^{
+        NSError *error;
         
-        NSDictionary *videoSettings = [NSDictionary dictionaryWithObjectsAndKeys:
-                                       AVVideoCodecH264, AVVideoCodecKey,
-                                       [NSNumber numberWithInt:_winSize.width], AVVideoWidthKey,
-                                       [NSNumber numberWithInt:_winSize.height], AVVideoHeightKey,
-                                       nil];
-        
-        AVAssetWriterInput* videoWriterInput = [AVAssetWriterInput
-                                                assetWriterInputWithMediaType:AVMediaTypeVideo
-                                                outputSettings:videoSettings];
-        
-        
-        AVAssetWriterInputPixelBufferAdaptor *adaptor = [AVAssetWriterInputPixelBufferAdaptor
-                                                         assetWriterInputPixelBufferAdaptorWithAssetWriterInput:videoWriterInput
-                                                         sourcePixelBufferAttributes:nil];
-        
-        NSParameterAssert(videoWriterInput);
-        NSParameterAssert([videoWriter canAddInput:videoWriterInput]);
-        
-        [videoWriter addInput:videoWriterInput];
-        [videoWriter startWriting];
-        [videoWriter startSessionAtSourceTime:kCMTimeZero];
-        /*
-        if (adaptor.assetWriterInput.readyForMoreMediaData)  {
-            CVPixelBufferRef buffer = [self pixelBufferFromCGImage:[image CGImage]];
-            [adaptor appendPixelBuffer:buffer withPresentationTime:kCMTimeZero];
-        }
-        */
-        
-        NSArray *images = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:self.filesPath error:&error];
-        
-        int i = 0;
-        while (i < images.count) {
+        videoWriter = [[AVAssetWriter alloc] initWithURL:
+                       [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"/Documents/output%ld.mp4", (long)self.videoloop]]] fileType:AVFileTypeQuickTimeMovie
+                                                   error:&error];
+        if (!error) {
+            NSParameterAssert(videoWriter);
             
-            NSString *imgPath = [images objectAtIndex:i];
-
-            if (![[imgPath pathExtension] isEqualToString:@"png"]) {
-                i++;
-                continue;
-            }
-            UIImage *img = [UIImage imageWithContentsOfFile:[self.filesPath stringByAppendingFormat:@"/%@",imgPath]];
+            NSDictionary *videoSettings = [NSDictionary dictionaryWithObjectsAndKeys:
+                                           AVVideoCodecH264, AVVideoCodecKey,
+                                           [NSNumber numberWithInt:_winSize.width], AVVideoWidthKey,
+                                           [NSNumber numberWithInt:_winSize.height], AVVideoHeightKey,
+                                           nil];
             
-            NSString *firstPart = [imgPath componentsSeparatedByString:@"_"][1];
+            AVAssetWriterInput* videoWriterInput = [AVAssetWriterInput
+                                                    assetWriterInputWithMediaType:AVMediaTypeVideo
+                                                    outputSettings:videoSettings];
             
-            float timed = [[firstPart stringByReplacingOccurrencesOfString:@".png" withString:@""] floatValue];
             
-            if (!self.firstTimeStamp) {
-                self.firstTimeStamp = timed;
-            }
-            if (adaptor.assetWriterInput.readyForMoreMediaData){
-                CFTimeInterval elapsed = (timed - self.firstTimeStamp);
-                CMTime time = CMTimeMakeWithSeconds(elapsed, 1000);
-                CVPixelBufferRef pixelBuffer = [self pixelBufferFromCGImage:[img CGImage]];
-                BOOL success = [adaptor appendPixelBuffer:pixelBuffer withPresentationTime:time];
-                if (!success) {
-                    NSLog(@"Warning: Unable to write buffer to video");
+            AVAssetWriterInputPixelBufferAdaptor *adaptor = [AVAssetWriterInputPixelBufferAdaptor
+                                                             assetWriterInputPixelBufferAdaptorWithAssetWriterInput:videoWriterInput
+                                                             sourcePixelBufferAttributes:nil];
+            
+            NSParameterAssert(videoWriterInput);
+            NSParameterAssert([videoWriter canAddInput:videoWriterInput]);
+            
+            [videoWriter addInput:videoWriterInput];
+            [videoWriter startWriting];
+            [videoWriter startSessionAtSourceTime:kCMTimeZero];
+            
+            NSArray *images = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self filesPath:YES] error:&error];
+            
+            int i = 0;
+            while (i < images.count) {
+                
+                NSString *imgPath = [images objectAtIndex:i];
+                
+                if (![[imgPath pathExtension] isEqualToString:@"png"]) {
+                    i++;
+                    continue;
                 }
-                CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
-                CVPixelBufferRelease(pixelBuffer);
-                i++;
-            }else{
-                [NSThread sleepForTimeInterval:.5];
+                UIImage *img = [UIImage imageWithContentsOfFile:[[self filesPath:YES] stringByAppendingFormat:@"/%@",imgPath]];
+                
+                NSString *firstPart = [imgPath componentsSeparatedByString:@"_"][1];
+                
+                float timed = [[firstPart stringByReplacingOccurrencesOfString:@".png" withString:@""] floatValue];
+                
+                if (!self.firstTimeStamp) {
+                    self.firstTimeStamp = timed;
+                }
+                if (adaptor.assetWriterInput.readyForMoreMediaData){
+                    CFTimeInterval elapsed = (timed - self.firstTimeStamp);
+                    CMTime time = CMTimeMakeWithSeconds(elapsed, 1000);
+                    CVPixelBufferRef pixelBuffer = [self pixelBufferFromCGImage:[img CGImage]];
+                    BOOL success = [adaptor appendPixelBuffer:pixelBuffer withPresentationTime:time];
+                    if (!success) {
+                        NSLog(@"Warning: Unable to write buffer to video");
+                    }
+                    CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+                    CVPixelBufferRelease(pixelBuffer);
+                    i++;
+                }else{
+                    [NSThread sleepForTimeInterval:.1];
+                }
             }
+            
+            [videoWriterInput markAsFinished];
+            
+            [videoWriter finishWritingWithCompletionHandler:^{
+                self.videoloop++;
+                NSLog(@"finished"); // Never gets called
+                dispatch_semaphore_signal(_writeVideoSemaphore);
+            }];
         }
-        
-        [videoWriterInput markAsFinished];
-        
-        [videoWriter finishWritingWithCompletionHandler:^{
-            NSLog(@"finished"); // Never gets called
-        }];
-    }
-    else {
-        NSLog(@"%@", error.localizedDescription);
-    }
+        else {
+            NSLog(@"%@", error.localizedDescription);
+        }
+    });
 }
 
 - (NSString*) applicationDocumentsDirectory
@@ -238,7 +237,7 @@
         i--;
     }
     
-    NSString* documentsDirectory= [self applicationDocumentsDirectory];
+    NSString* documentsDirectory = [self applicationDocumentsDirectory];
     NSString* myDocumentPath= [documentsDirectory stringByAppendingPathComponent:@"merge_video.mp4"];
     NSURL *url = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
     if([[NSFileManager defaultManager] fileExistsAtPath:myDocumentPath])
