@@ -215,6 +215,8 @@
             NSParameterAssert(videoWriterInput);
             NSParameterAssert([videoWriter canAddInput:videoWriterInput]);
             
+            videoWriterInput.transform = [self videoTransformForDeviceOrientation];
+            
             [videoWriter addInput:videoWriterInput];
             [videoWriter startWriting];
             [videoWriter startSessionAtSourceTime:kCMTimeZero];
@@ -290,7 +292,7 @@
     CVReturn status =
     CVPixelBufferCreate(
                         kCFAllocatorDefault, _winSize.width, _winSize.height,
-                        kCVPixelFormatType_32ARGB, (__bridge CFDictionaryRef)options,
+                        kCVPixelFormatType_32BGRA, (__bridge CFDictionaryRef)options,
                         &pxbuffer);
     NSParameterAssert(status == kCVReturnSuccess && pxbuffer != NULL);
     
@@ -373,8 +375,9 @@
             i--;
         }
         
+        composedTrack.preferredTransform = [self videoTransformForDeviceOrientation];
+        
         NSString* documentsDirectory = [self applicationDocumentsDirectory];
-#warning nombre del video debería llebar fecha
         NSString* myDocumentPath= [documentsDirectory stringByAppendingPathComponent:@"merge_video.mp4"];
         NSURL *url = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
         if([[NSFileManager defaultManager] fileExistsAtPath:myDocumentPath])
@@ -424,6 +427,28 @@
         }];
         
     });
+}
+
+
+
+
+- (CGAffineTransform)videoTransformForDeviceOrientation
+{
+    CGAffineTransform videoTransform;
+    switch ([[UIApplication sharedApplication] statusBarOrientation]) {
+        case UIDeviceOrientationLandscapeLeft:
+            videoTransform = CGAffineTransformMakeRotation(-M_PI_2);
+            break;
+        case UIDeviceOrientationLandscapeRight:
+            videoTransform = CGAffineTransformMakeRotation(M_PI_2);
+            break;
+        case UIDeviceOrientationPortraitUpsideDown:
+            videoTransform = CGAffineTransformMakeRotation(M_PI);
+            break;
+        default:
+            videoTransform = CGAffineTransformIdentity;
+    }
+    return videoTransform;
 }
 
 
