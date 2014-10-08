@@ -24,7 +24,6 @@
     [super viewDidLoad];
 	// Do any additional setup after loading the view, typically from a nib.
     self.recorder = [[GPScreenVideoRecording alloc] init];
-    //[self.recorder startCapturing];
 }
 
 - (void)didReceiveMemoryWarning
@@ -38,7 +37,6 @@
 }
 
 - (IBAction)StopRecording:(id)sender {
-    
     [self.recorder stopCapturing];
 }
 

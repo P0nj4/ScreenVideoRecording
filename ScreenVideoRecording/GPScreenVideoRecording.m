@@ -76,7 +76,6 @@
     if ((UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) && _scale > 1) {
         _scale = 1.0;
     }
-    _writeVideoSemaphore = nil;
     _screenTaker_queue = dispatch_queue_create("GPScreenVideoRecording.screenTaker_queue", DISPATCH_QUEUE_SERIAL);
     _FSWriter_queue = dispatch_queue_create("GPScreenVideoRecording.FSWriter_queue", DISPATCH_QUEUE_SERIAL);
     _videoWriter_queue = dispatch_queue_create("GPScreenVideoRecording._videoWriter_queue", DISPATCH_QUEUE_SERIAL);
@@ -139,6 +138,7 @@
         BOOL pendingScreenshots = YES;
         while (pendingScreenshots) {
             if (dispatch_semaphore_wait(_writeVideoSemaphore, DISPATCH_TIME_NOW) != 0) {
+                NSLog(@"_writeVideoSemaphore waiting");
                 [NSThread sleepForTimeInterval:0.2];
             } else {
                 NSString *pendingPath = nil;
@@ -266,6 +266,7 @@
                 self.videoloop++;
                 NSLog(@"video finished");
                 dispatch_semaphore_signal(_writeVideoSemaphore);
+                NSLog(@"_writeVideoSemaphore dispatched");
             }];
         }
         else {
@@ -329,6 +330,7 @@
     dispatch_async(mergeQueue, ^{
         BOOL readyToRun = (dispatch_semaphore_wait(_writeVideoSemaphore, DISPATCH_TIME_NOW) != 0) ;
         while (!readyToRun) {
+            NSLog(@"_writeVideoSemaphore waiting");
             [NSThread sleepForTimeInterval:0.2];
         }
         NSLog(@"MERGE - Started");
@@ -404,11 +406,6 @@
                     }
                     NSLog(@"Merge Completed");
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        _screenTaker_queue = nil;
-                        _FSWriter_queue = nil;
-                        _videoWriter_queue = nil;
-                        _pixelAppendSemaphore = nil;
-                        //_writeVideoSemaphore = nil;
                         videoWriter = nil;
                     });
                     break;
