@@ -13,6 +13,7 @@
 
 #define kMaxScreenshotCount 150
 #define kFramesMod 1
+#define kVideoScale 0.7
 #define kVideosTemporalFolder @"videos/tmp"
 #define kScreenshotsTemporalFolder @"videos/screenshot"
 
@@ -197,12 +198,13 @@
         if (!error) {
             NSParameterAssert(videoWriter);
             
-            NSDictionary *videoSettings = [NSDictionary dictionaryWithObjectsAndKeys:
-                                           AVVideoCodecH264, AVVideoCodecKey,
-                                           [NSNumber numberWithInt:_winSize.width], AVVideoWidthKey,
-                                           [NSNumber numberWithInt:_winSize.height], AVVideoHeightKey,
-                                           nil];
+            NSInteger pixelNumber = _winSize.width * _winSize.height * _scale * kVideoScale;
+            NSDictionary* videoCompression = @{AVVideoAverageBitRateKey: @(pixelNumber * 11.4)};
             
+            NSDictionary* videoSettings = @{AVVideoCodecKey: AVVideoCodecH264,
+                                            AVVideoWidthKey: [NSNumber numberWithInt:_winSize.width*_scale * kVideoScale],
+                                            AVVideoHeightKey: [NSNumber numberWithInt:_winSize.height*_scale * kVideoScale],
+                                            AVVideoCompressionPropertiesKey: videoCompression};
             AVAssetWriterInput* videoWriterInput = [AVAssetWriterInput
                                                     assetWriterInputWithMediaType:AVMediaTypeVideo
                                                     outputSettings:videoSettings];
@@ -375,7 +377,7 @@
             i--;
         }
         
-        composedTrack.preferredTransform = [self videoTransformForDeviceOrientation];
+        composedTrack.preferredTransform = [self mergeTransform];
         
         NSString* documentsDirectory = [self applicationDocumentsDirectory];
         NSString* myDocumentPath= [documentsDirectory stringByAppendingPathComponent:@"merge_video.mp4"];
@@ -429,6 +431,14 @@
     });
 }
 
+- (CGAffineTransform)mergeTransform {
+    // Rotate 45 degrees
+    CGAffineTransform rotate = [self videoTransformForDeviceOrientation];
+    // Move to the left
+    CGAffineTransform scale  = CGAffineTransformMakeScale(0.1, 0.1);
+    // Apply them to a view
+    return CGAffineTransformConcat(rotate, scale);
+}
 
 
 
